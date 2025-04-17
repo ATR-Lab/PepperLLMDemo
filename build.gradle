@@ -25,7 +25,7 @@ allprojects {
         google()
         jcenter()
         maven {
-            url 'http://android.aldebaran.com/sdk/maven'
+            url 'https://qisdk.softbankrobotics.com/sdk/maven'
         }
     }
 }

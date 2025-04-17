@@ -3,6 +3,8 @@
     package="com.example.peppertest">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
 
     <application
         android:allowBackup="true"
@@ -11,6 +13,7 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:usesCleartextTraffic="true"
+        android:requestLegacyExternalStorage="true"
         android:theme="@style/Theme.PepperTest">
         <activity
             android:name=".MainActivity"
@@ -23,4 +26,5 @@
         </activity>
     </application>
 
+    <uses-feature android:name="com.softbank.hardware.pepper"/>
 </manifest>
