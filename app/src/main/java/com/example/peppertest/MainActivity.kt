@@ -18,15 +18,33 @@ import com.aldebaran.qi.sdk.`object`.human.EngagementIntentionState
 import com.aldebaran.qi.sdk.`object`.human.Human
 import com.aldebaran.qi.sdk.`object`.humanawareness.EngageHuman
 import com.aldebaran.qi.sdk.design.activity.RobotActivity
+import com.example.peppertest.camera.PepperCameraManager
+import com.example.peppertest.command.CommandDispatcher
+import com.example.peppertest.websocket.PepperWebSocketClient
 import kotlinx.android.synthetic.main.activity_main.*
-import okhttp3.*
-import java.io.IOException
+import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
-class MainActivity : RobotActivity(), RobotLifecycleCallbacks {
-    private val client = OkHttpClient()
-    private val serverUrl = "http://10.22.9.224:3000/health"
+class MainActivity : RobotActivity(), RobotLifecycleCallbacks, 
+                     PepperCameraManager.FrameListener,
+                     PepperWebSocketClient.CommandListener,
+                     PepperWebSocketClient.ConnectionStateListener {
+                     
+    companion object {
+        private const val TAG = "PepperMainActivity"
+        private const val WEBSOCKET_URL = "ws://10.22.9.224:3000/pepper"
+    }
+    
     private var qiContext: QiContext? = null
+    
+    // WebSocket client
+    private lateinit var webSocketClient: PepperWebSocketClient
+    
+    // Camera manager
+    private lateinit var cameraManager: PepperCameraManager
+    
+    // Command dispatcher
+    private var commandDispatcher: CommandDispatcher? = null
     
     // Store animations and animate actions
     private var raiseHandsAnimate: Animate? = null
@@ -38,11 +56,16 @@ class MainActivity : RobotActivity(), RobotLifecycleCallbacks {
     private var humanEngagementFuture: Future<Void>? = null
     private var engageHuman: EngageHuman? = null
     private var humanCheckTaskRunning = false
-    private val TAG = "PepperEyeContact"
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
+        
+        // Initialize WebSocket client
+        webSocketClient = PepperWebSocketClient(WEBSOCKET_URL, this, this)
+        
+        // Initialize camera manager
+        cameraManager = PepperCameraManager(this)
         
         // Register the RobotLifecycleCallbacks
         QiSDK.register(this, this)
@@ -59,6 +82,11 @@ class MainActivity : RobotActivity(), RobotLifecycleCallbacks {
     }
     
     override fun onDestroy() {
+        // Clean up resources
+        webSocketClient.disconnect()
+        cameraManager.release()
+        commandDispatcher?.release()
+        
         // Unregister the RobotLifecycleCallbacks
         QiSDK.unregister(this, this)
         super.onDestroy()
@@ -68,26 +96,32 @@ class MainActivity : RobotActivity(), RobotLifecycleCallbacks {
         // Store the QiContext for later use
         this.qiContext = qiContext
         
+        // Initialize command dispatcher
+        commandDispatcher = CommandDispatcher(qiContext)
+        
+        // Initialize camera
+        cameraManager.initialize(qiContext)
+        
         // Preload all animations in onRobotFocusGained
         preloadAnimations(qiContext)
         
         // Start the human engagement process
         startHumanEngagement()
         
-        // Remove or move to different thread, onRobotFocusGained runs on a different thread than the
-        // main UI thread.
-//        responseTextView.text = "Ready to play animations!"
-
-        /* 
-        // Original implementation - commented out as requested
-        // Start the API request as soon as the activity is created
-        fetchHealthEndpoint()
-        */
+        // Connect to WebSocket server
+        webSocketClient.connect()
+        
+        runOnUiThread {
+            responseTextView.text = "Robot ready. Connecting to server..."
+        }
     }
     
     override fun onRobotFocusLost() {
         // Stop engaging with humans
         stopHumanEngagement()
+        
+        // Stop camera capture
+        cameraManager.stopCapture()
         
         // Clean up resources
         raiseHandsAnimate?.removeAllOnStartedListeners()
@@ -99,6 +133,7 @@ class MainActivity : RobotActivity(), RobotLifecycleCallbacks {
         
         // Reset QiContext
         this.qiContext = null
+        commandDispatcher = null
     }
     
     override fun onRobotFocusRefused(reason: String) {
@@ -107,6 +142,69 @@ class MainActivity : RobotActivity(), RobotLifecycleCallbacks {
             "Robot focus refused: $reason".also { responseTextView.text = it }
         }
     }
+    
+    //
+    // WebSocket Connection State Listener Implementation
+    //
+    
+    override fun onConnected() {
+        Log.d(TAG, "WebSocket connected")
+        runOnUiThread {
+            responseTextView.text = "Connected to server. Starting camera..."
+        }
+        
+        // Start camera capture when connected
+        cameraManager.startCapture()
+    }
+    
+    override fun onDisconnected() {
+        Log.d(TAG, "WebSocket disconnected")
+        runOnUiThread {
+            responseTextView.text = "Disconnected from server. Reconnecting..."
+        }
+        
+        // Pause camera capture when disconnected
+        cameraManager.pauseCapture()
+    }
+    
+    override fun onReconnectFailed() {
+        Log.d(TAG, "WebSocket reconnection failed")
+        runOnUiThread {
+            responseTextView.text = "Failed to reconnect. Please try manually."
+        }
+        
+        // Stop camera capture when reconnection fails
+        cameraManager.stopCapture()
+    }
+    
+    //
+    // Frame Listener Implementation
+    //
+    
+    override fun onFrameCaptured(imageData: ByteArray) {
+        // Send the frame over WebSocket
+        webSocketClient.sendCameraFrame(imageData)
+    }
+    
+    //
+    // Command Listener Implementation
+    //
+    
+    override fun onCommandReceived(command: JSONObject) {
+        Log.d(TAG, "Command received: $command")
+        
+        // Update UI
+        runOnUiThread {
+            responseTextView.text = "Executing command: ${command.optString("action")}"
+        }
+        
+        // Dispatch the command
+        commandDispatcher?.dispatch(command)
+    }
+    
+    //
+    // Animation Methods
+    //
     
     private fun preloadAnimations(qiContext: QiContext) {
         try {
@@ -187,7 +285,9 @@ class MainActivity : RobotActivity(), RobotLifecycleCallbacks {
         }
     }
     
-    // =============== Human engagement functions ===============
+    //
+    // Human Engagement Methods
+    //
     
     private fun startHumanEngagement() {
         qiContext?.let { context ->
@@ -308,73 +408,4 @@ class MainActivity : RobotActivity(), RobotLifecycleCallbacks {
             }
         }
     }
-    
-    /*
-    // Original implementation - commented out as requested
-    private fun fetchHealthEndpoint() {
-        progressBar.visibility = View.VISIBLE
-        
-        val request = Request.Builder()
-            .url(serverUrl)
-            .build()
-            
-        client.newCall(request).enqueue(object : Callback {
-            override fun onFailure(call: Call, e: IOException) {
-                runOnUiThread {
-                    progressBar.visibility = View.GONE
-                    val errorMessage = "Error: ${e.message}"
-                    responseTextView.text = errorMessage
-                    
-                    // Speak the error message if QiContext is available
-                    qiContext?.let { context ->
-                        speakText(context, errorMessage)
-                    }
-                }
-            }
-            
-            override fun onResponse(call: Call, response: Response) {
-                val responseText = response.body?.string() ?: "No response body"
-
-                // Try to directly say a simple phrase to test if speech works regardless of directory issues
-                try {
-                    val testPhrase = Phrase("Here is what I got from the endpoint: $responseText")
-                    val say = SayBuilder.with(qiContext)
-                        .withPhrase(testPhrase)
-                        .build()
-                        
-                    // Execute in a separate thread to avoid blocking UI
-                    Thread {
-                        try {
-                            say.run()
-                        } catch (e: Exception) {
-                            runOnUiThread {
-                                Log.e("PepperApp", "Error during test speech: ${e.message}")
-                            }
-                        }
-                    }.start()
-                } catch (e: Exception) {
-                    Log.e("PepperApp", "Error creating test speech: ${e.message}")
-                }
-                
-                runOnUiThread {
-                    progressBar.visibility = View.GONE
-                    responseTextView.text = responseText
-                }
-            }
-        })
-    }
-    
-    private fun speakText(qiContext: QiContext, text: String) {
-        // Create a phrase with the text to say
-        val phrase = Phrase(text)
-        
-        // Build the say action
-        val say = SayBuilder.with(qiContext)
-            .withPhrase(phrase)
-            .build()
-        
-        // Execute the say action
-        say.run()
-    }
-    */
 }
