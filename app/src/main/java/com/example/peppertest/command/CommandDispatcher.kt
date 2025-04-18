@@ -47,6 +47,7 @@ class CommandDispatcher(private val qiContext: QiContext) {
             }
             
             val action = command.getString("action")
+            Log.d(TAG, "Dispatching command: $action")
             
             executor.submit {
                 try {
@@ -54,6 +55,7 @@ class CommandDispatcher(private val qiContext: QiContext) {
                         CMD_SAY -> handleSayCommand(command)
                         CMD_ANIMATE -> handleAnimateCommand(command)
                         CMD_GO_TO -> handleGoToCommand(command)
+                        "none" -> Log.d(TAG, "Received 'none' command, no action needed")
                         else -> Log.w(TAG, "Unknown command action: $action")
                     }
                 } catch (e: Exception) {

@@ -1,5 +1,6 @@
 package com.example.peppertest
 
+import android.graphics.Color
 import android.os.Bundle
 import android.util.Log
 import android.view.View
@@ -150,7 +151,8 @@ class MainActivity : RobotActivity(), RobotLifecycleCallbacks,
     override fun onConnected() {
         Log.d(TAG, "WebSocket connected")
         runOnUiThread {
-            responseTextView.text = "Connected to server. Starting camera..."
+            statusTextView.text = "Connected"
+            statusTextView.setTextColor(Color.GREEN)
         }
         
         // Start camera capture when connected
@@ -160,7 +162,8 @@ class MainActivity : RobotActivity(), RobotLifecycleCallbacks,
     override fun onDisconnected() {
         Log.d(TAG, "WebSocket disconnected")
         runOnUiThread {
-            responseTextView.text = "Disconnected from server. Reconnecting..."
+            statusTextView.text = "Disconnected"
+            statusTextView.setTextColor(Color.RED)
         }
         
         // Pause camera capture when disconnected
@@ -170,7 +173,8 @@ class MainActivity : RobotActivity(), RobotLifecycleCallbacks,
     override fun onReconnectFailed() {
         Log.d(TAG, "WebSocket reconnection failed")
         runOnUiThread {
-            responseTextView.text = "Failed to reconnect. Please try manually."
+            statusTextView.text = "Reconnection Failed"
+            statusTextView.setTextColor(Color.RED)
         }
         
         // Stop camera capture when reconnection fails
@@ -191,14 +195,9 @@ class MainActivity : RobotActivity(), RobotLifecycleCallbacks,
     //
     
     override fun onCommandReceived(command: JSONObject) {
-        Log.d(TAG, "Command received: $command")
+        Log.d(TAG, "Command received in MainActivity: $command")
         
-        // Update UI
-        runOnUiThread {
-            responseTextView.text = "Executing command: ${command.optString("action")}"
-        }
-        
-        // Dispatch the command
+        // Dispatch the command to the CommandDispatcher
         commandDispatcher?.dispatch(command)
     }
     

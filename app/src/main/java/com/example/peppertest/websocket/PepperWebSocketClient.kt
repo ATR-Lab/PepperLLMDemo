@@ -117,12 +117,22 @@ class PepperWebSocketClient(
             
             override fun onMessage(webSocket: WebSocket, text: String) {
                 try {
+                    Log.d(TAG, "Received message: $text")
                     val json = JSONObject(text)
+                    
+                    // Check if this is a command message
                     if (json.has("type") && json.getString("type") == "command") {
+                        Log.d(TAG, "Received command: ${json.getString("action")}")
                         commandListener.onCommandReceived(json)
+                    } else if (json.has("type") && json.getString("type") == "pong") {
+                        // Handle pong response
+                        Log.d(TAG, "Received pong response")
+                        lastPongTime = System.currentTimeMillis()
+                    } else {
+                        Log.d(TAG, "Received unknown message type")
                     }
                 } catch (e: Exception) {
-                    Log.e(TAG, "Error parsing command", e)
+                    Log.e(TAG, "Error parsing message", e)
                 }
             }
             
