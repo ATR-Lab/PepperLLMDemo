@@ -3,19 +3,25 @@ package com.example.peppertest
 import android.os.Bundle
 import android.util.Log
 import android.view.View
+import com.aldebaran.qi.Future
 import com.aldebaran.qi.sdk.QiContext
 import com.aldebaran.qi.sdk.QiSDK
 import com.aldebaran.qi.sdk.RobotLifecycleCallbacks
 import com.aldebaran.qi.sdk.builder.AnimateBuilder
 import com.aldebaran.qi.sdk.builder.AnimationBuilder
+import com.aldebaran.qi.sdk.builder.EngageHumanBuilder
 import com.aldebaran.qi.sdk.builder.SayBuilder
 import com.aldebaran.qi.sdk.`object`.actuation.Animate
 import com.aldebaran.qi.sdk.`object`.actuation.Animation
 import com.aldebaran.qi.sdk.`object`.conversation.Phrase
+import com.aldebaran.qi.sdk.`object`.human.EngagementIntentionState
+import com.aldebaran.qi.sdk.`object`.human.Human
+import com.aldebaran.qi.sdk.`object`.humanawareness.EngageHuman
 import com.aldebaran.qi.sdk.design.activity.RobotActivity
 import kotlinx.android.synthetic.main.activity_main.*
 import okhttp3.*
 import java.io.IOException
+import java.util.concurrent.TimeUnit
 
 class MainActivity : RobotActivity(), RobotLifecycleCallbacks {
     private val client = OkHttpClient()
@@ -27,6 +33,12 @@ class MainActivity : RobotActivity(), RobotLifecycleCallbacks {
     private var danceAnimate: Animate? = null
     private var currentAnimate: Animate? = null
     private var isAnimationRunning = false
+    
+    // Human engagement variables
+    private var humanEngagementFuture: Future<Void>? = null
+    private var engageHuman: EngageHuman? = null
+    private var humanCheckTaskRunning = false
+    private val TAG = "PepperEyeContact"
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -37,7 +49,7 @@ class MainActivity : RobotActivity(), RobotLifecycleCallbacks {
         
         // Set up button click listeners
         raiseHandsButton.setOnClickListener {
-            Log.d( "MARCUS", "raiseHandsButton::setOnClickListener called")
+            Log.d(TAG, "raiseHandsButton::setOnClickListener called")
             playAnimation(raiseHandsAnimate, "Raise Hands")
         }
         
@@ -59,6 +71,9 @@ class MainActivity : RobotActivity(), RobotLifecycleCallbacks {
         // Preload all animations in onRobotFocusGained
         preloadAnimations(qiContext)
         
+        // Start the human engagement process
+        startHumanEngagement()
+        
         // Remove or move to different thread, onRobotFocusGained runs on a different thread than the
         // main UI thread.
 //        responseTextView.text = "Ready to play animations!"
@@ -71,6 +86,9 @@ class MainActivity : RobotActivity(), RobotLifecycleCallbacks {
     }
     
     override fun onRobotFocusLost() {
+        // Stop engaging with humans
+        stopHumanEngagement()
+        
         // Clean up resources
         raiseHandsAnimate?.removeAllOnStartedListeners()
         danceAnimate?.removeAllOnStartedListeners()
@@ -85,7 +103,9 @@ class MainActivity : RobotActivity(), RobotLifecycleCallbacks {
     
     override fun onRobotFocusRefused(reason: String) {
         // Handle focus refused
-        "Robot focus refused: $reason".also { responseTextView.text = it }
+        runOnUiThread {
+            "Robot focus refused: $reason".also { responseTextView.text = it }
+        }
     }
     
     private fun preloadAnimations(qiContext: QiContext) {
@@ -117,7 +137,7 @@ class MainActivity : RobotActivity(), RobotLifecycleCallbacks {
             }
             
         } catch (e: Exception) {
-            Log.e("Animation", "Error loading animations: ${e.message}")
+            Log.e(TAG, "Error loading animations: ${e.message}")
             runOnUiThread {
                 responseTextView.text = "Error loading animations: ${e.message}"
             }
@@ -125,7 +145,7 @@ class MainActivity : RobotActivity(), RobotLifecycleCallbacks {
     }
     
     private fun playAnimation(animate: Animate?, animationName: String) {
-        Log.d( "MARCUS", "currently in playAnimation(Animate?, String)")
+        Log.d(TAG, "currently in playAnimation(Animate?, String)")
 
         // Check if an animation is already running
         if (isAnimationRunning) {
@@ -145,15 +165,8 @@ class MainActivity : RobotActivity(), RobotLifecycleCallbacks {
         // Store current animate action
         currentAnimate = animate
         
-        // Add listeners for animation events
-//        animate.addOnStartedListener {
-//            Log.d( "MARCUS", "Animate.addOnStartedListener called")
-//            isAnimationRunning = true
-////            runOnUiThread {
-////                responseTextView.text = "$animationName animation started"
-////                progressBar.visibility = View.GONE
-////            }
-//        }
+        // Mark animation as running
+        isAnimationRunning = true
         
         // Run the animation asynchronously
         animate.async().run().thenConsume { future ->
@@ -163,13 +176,135 @@ class MainActivity : RobotActivity(), RobotLifecycleCallbacks {
                     responseTextView.text = "$animationName animation completed"
                 } else if (future.hasError()) {
                     val error = future.error
-                    Log.e("Animation", "Error during animation: ${error.message}")
+                    Log.e(TAG, "Error during animation: ${error.message}")
                     responseTextView.text = "Animation error: ${error.message}"
                 }
                 progressBar.visibility = View.GONE
                 
                 // Remove the listener after animation completes
                 animate.removeAllOnStartedListeners()
+            }
+        }
+    }
+    
+    // =============== Human engagement functions ===============
+    
+    private fun startHumanEngagement() {
+        qiContext?.let { context ->
+            humanCheckTaskRunning = true
+            
+            // Start a periodic task to find and engage with humans
+            Thread {
+                try {
+                    while (humanCheckTaskRunning && qiContext != null) {
+                        findMostEngagedHuman()
+                        // Check for engaged humans every 3 seconds
+                        TimeUnit.SECONDS.sleep(3)
+                    }
+                } catch (e: InterruptedException) {
+                    Log.d(TAG, "Human engagement check interrupted")
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error in human engagement check: ${e.message}")
+                }
+            }.start()
+            
+            runOnUiThread {
+                responseTextView.text = "Looking for humans to engage with..."
+            }
+        }
+    }
+    
+    private fun stopHumanEngagement() {
+        // Stop the periodic human check
+        humanCheckTaskRunning = false
+        
+        // Cancel any active engagement
+        humanEngagementFuture?.requestCancellation()
+        humanEngagementFuture = null
+        
+        // Clean up the engage human action
+        engageHuman = null
+    }
+    
+    private fun findMostEngagedHuman() {
+        qiContext?.let { context ->
+            try {
+                // Get the human awareness service
+                val humanAwareness = context.humanAwareness
+                
+                // Get humans around the robot
+                val humansAround = humanAwareness.humansAround
+                
+                if (humansAround.isEmpty()) {
+                    Log.d(TAG, "No humans detected")
+                    runOnUiThread {
+                        responseTextView.text = "No humans detected"
+                    }
+                    return
+                }
+                
+                Log.d(TAG, "Found ${humansAround.size} humans around")
+                
+                // Find the human with the highest engagement intention
+                val mostEngagedHuman = findHumanWithHighestEngagement(humansAround)
+                
+                if (mostEngagedHuman != null) {
+                    engageWithHuman(mostEngagedHuman)
+                } else {
+                    Log.d(TAG, "No humans showing engagement")
+                    runOnUiThread {
+                        responseTextView.text = "No humans engaging"
+                    }
+                }
+                
+            } catch (e: Exception) {
+                Log.e(TAG, "Error finding humans: ${e.message}")
+            }
+        }
+    }
+    
+    private fun findHumanWithHighestEngagement(humans: List<Human>): Human? {
+        // Find humans that are engaged or want to engage
+        val engagedHumans = humans.filter { 
+            it.engagementIntention == EngagementIntentionState.INTERESTED
+        }
+        
+        // If we have engaged humans, return the first one
+        if (engagedHumans.isNotEmpty()) {
+            Log.d(TAG, "Found ${engagedHumans.size} engaged humans")
+            return engagedHumans.first()
+        }
+        
+        // Otherwise, return the first human that at least has attention toward the robot
+        return humans.firstOrNull { 
+            it.attention.toString() == "LOOKING_AT" 
+        }
+    }
+    
+    private fun engageWithHuman(human: Human) {
+        qiContext?.let { context ->
+            // Cancel any existing engagement
+            humanEngagementFuture?.requestCancellation()
+            
+            try {
+                // Create a new engage human action
+                engageHuman = EngageHumanBuilder.with(context)
+                    .withHuman(human)
+                    .build()
+                
+                // Start engaging with the human
+                humanEngagementFuture = engageHuman?.async()?.run()
+                
+                Log.d(TAG, "Engaging with human: ${human.attention}, ${human.engagementIntention}")
+                
+                runOnUiThread {
+                    responseTextView.text = "Engaging with human"
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error engaging with human: ${e.message}")
+                runOnUiThread {
+                    responseTextView.text = "Error engaging: ${e.message}"
+                }
             }
         }
     }
