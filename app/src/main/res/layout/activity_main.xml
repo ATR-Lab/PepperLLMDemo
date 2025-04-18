@@ -34,7 +34,7 @@
         android:layout_height="wrap_content"
         android:layout_margin="16dp"
         android:orientation="horizontal"
-        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintBottom_toTopOf="@id/headControlContainer"
         app:layout_constraintLeft_toLeftOf="parent"
         app:layout_constraintRight_toRightOf="parent"
         app:layout_constraintTop_toBottomOf="@id/responseTextView">
@@ -60,5 +60,72 @@
             android:textSize="18sp" />
 
     </LinearLayout>
+
+    <!-- Head Control Directional Pad -->
+    <androidx.constraintlayout.widget.ConstraintLayout
+        android:id="@+id/headControlContainer"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_margin="16dp"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintLeft_toLeftOf="parent"
+        app:layout_constraintRight_toRightOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/buttonsContainer">
+
+        <TextView
+            android:id="@+id/headControlTitle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Head Control"
+            android:textSize="16sp"
+            android:layout_marginBottom="8dp"
+            app:layout_constraintBottom_toTopOf="@id/headUpButton"
+            app:layout_constraintLeft_toLeftOf="parent"
+            app:layout_constraintRight_toRightOf="parent"
+            app:layout_constraintTop_toTopOf="parent" />
+
+        <Button
+            android:id="@+id/headUpButton"
+            android:layout_width="80dp"
+            android:layout_height="80dp"
+            android:text="↑"
+            android:textSize="24sp"
+            app:layout_constraintBottom_toTopOf="@id/headLeftButton"
+            app:layout_constraintLeft_toLeftOf="@id/headRightButton"
+            app:layout_constraintRight_toRightOf="@id/headRightButton"
+            app:layout_constraintTop_toBottomOf="@id/headControlTitle" />
+
+        <Button
+            android:id="@+id/headLeftButton"
+            android:layout_width="80dp"
+            android:layout_height="80dp"
+            android:text="←"
+            android:textSize="24sp"
+            app:layout_constraintBottom_toBottomOf="@id/headDownButton"
+            app:layout_constraintRight_toLeftOf="@id/headDownButton"
+            app:layout_constraintTop_toTopOf="@id/headDownButton" />
+
+        <Button
+            android:id="@+id/headDownButton"
+            android:layout_width="80dp"
+            android:layout_height="80dp"
+            android:text="↓"
+            android:textSize="24sp"
+            app:layout_constraintBottom_toBottomOf="parent"
+            app:layout_constraintLeft_toLeftOf="parent"
+            app:layout_constraintRight_toRightOf="parent"
+            app:layout_constraintTop_toBottomOf="@id/headUpButton" />
+
+        <Button
+            android:id="@+id/headRightButton"
+            android:layout_width="80dp"
+            android:layout_height="80dp"
+            android:text="→"
+            android:textSize="24sp"
+            app:layout_constraintBottom_toBottomOf="@id/headDownButton"
+            app:layout_constraintLeft_toRightOf="@id/headDownButton"
+            app:layout_constraintTop_toTopOf="@id/headDownButton" />
+
+    </androidx.constraintlayout.widget.ConstraintLayout>
 
 </androidx.constraintlayout.widget.ConstraintLayout>

@@ -2,43 +2,70 @@ package com.example.peppertest
 
 import android.os.Bundle
 import android.util.Log
-import android.view.View
 import com.aldebaran.qi.Future
 import com.aldebaran.qi.sdk.QiContext
 import com.aldebaran.qi.sdk.QiSDK
+import com.aldebaran.qi.sdk.QiThreadPool
 import com.aldebaran.qi.sdk.RobotLifecycleCallbacks
-import com.aldebaran.qi.sdk.builder.AnimateBuilder
-import com.aldebaran.qi.sdk.builder.AnimationBuilder
-import com.aldebaran.qi.sdk.builder.EngageHumanBuilder
-import com.aldebaran.qi.sdk.builder.SayBuilder
-import com.aldebaran.qi.sdk.`object`.actuation.Animate
-import com.aldebaran.qi.sdk.`object`.actuation.Animation
-import com.aldebaran.qi.sdk.`object`.conversation.Phrase
-import com.aldebaran.qi.sdk.`object`.human.EngagementIntentionState
-import com.aldebaran.qi.sdk.`object`.human.Human
-import com.aldebaran.qi.sdk.`object`.humanawareness.EngageHuman
+//import com.aldebaran.qi.sdk.builder.AnimateBuilder
+//import com.aldebaran.qi.sdk.builder.AnimationBuilder
+//import com.aldebaran.qi.sdk.builder.EngageHumanBuilder
+import com.aldebaran.qi.sdk.builder.HolderBuilder
+import com.aldebaran.qi.sdk.builder.LookAtBuilder
+//import com.aldebaran.qi.sdk.builder.SayBuilder
+import com.aldebaran.qi.sdk.builder.TransformBuilder
+//import com.aldebaran.qi.sdk.`object`.actuation.Animate
+//import com.aldebaran.qi.sdk.`object`.actuation.Animation
+import com.aldebaran.qi.sdk.`object`.actuation.LookAt
+import com.aldebaran.qi.sdk.`object`.actuation.LookAtMovementPolicy
+import com.aldebaran.qi.sdk.`object`.actuation.Frame
+import com.aldebaran.qi.sdk.`object`.geometry.Vector3
+import com.aldebaran.qi.sdk.`object`.holder.AutonomousAbilitiesType
+import com.aldebaran.qi.sdk.`object`.holder.Holder
+//import com.aldebaran.qi.sdk.`object`.conversation.Phrase
+//import com.aldebaran.qi.sdk.`object`.human.EngagementIntentionState
+//import com.aldebaran.qi.sdk.`object`.human.Human
+//import com.aldebaran.qi.sdk.`object`.humanawareness.EngageHuman
 import com.aldebaran.qi.sdk.design.activity.RobotActivity
 import kotlinx.android.synthetic.main.activity_main.*
-import okhttp3.*
-import java.io.IOException
-import java.util.concurrent.TimeUnit
+//import okhttp3.*
+//import java.io.IOException
+//import java.util.concurrent.TimeUnit
+import java.util.concurrent.Callable
 
 class MainActivity : RobotActivity(), RobotLifecycleCallbacks {
-    private val client = OkHttpClient()
-    private val serverUrl = "http://10.22.9.224:3000/health"
+    //private val client = OkHttpClient()
+    //private val serverUrl = "http://10.22.9.224:3000/health"
     private var qiContext: QiContext? = null
     
     // Store animations and animate actions
-    private var raiseHandsAnimate: Animate? = null
-    private var danceAnimate: Animate? = null
-    private var currentAnimate: Animate? = null
-    private var isAnimationRunning = false
+    //private var raiseHandsAnimate: Animate? = null
+    //private var danceAnimate: Animate? = null
+    //private var currentAnimate: Animate? = null
+    //private var isAnimationRunning = false
     
     // Human engagement variables
-    private var humanEngagementFuture: Future<Void>? = null
-    private var engageHuman: EngageHuman? = null
-    private var humanCheckTaskRunning = false
-    private val TAG = "PepperEyeContact"
+    //private var humanEngagementFuture: Future<Void>? = null
+    //private var engageHuman: EngageHuman? = null
+    //private var humanCheckTaskRunning = false
+    private val TAG = "PepperHeadControl"
+    
+    // Head movement variables
+    private var lookAt: LookAt? = null
+    private var lookAtFuture: Future<Void>? = null
+    private var targetFrame: Frame? = null
+    
+    // Head position coordinates (relative to robot's frame)
+    // X: Forward/backward, Y: Left/right, Z: Up/down
+    private var headPositionX = 0.5  // Less extreme forward position
+    private var headPositionY = 0.0  // Centered left-right
+    private var headPositionZ = 0.5  // Slightly upward
+    
+    // Movement increments
+    private val POSITION_INCREMENT = 0.2
+    
+    // Autonomous ability control
+    private var autonomousAbilitiesHolder: Holder? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -47,14 +74,40 @@ class MainActivity : RobotActivity(), RobotLifecycleCallbacks {
         // Register the RobotLifecycleCallbacks
         QiSDK.register(this, this)
         
-        // Set up button click listeners
-        raiseHandsButton.setOnClickListener {
-            Log.d(TAG, "raiseHandsButton::setOnClickListener called")
-            playAnimation(raiseHandsAnimate, "Raise Hands")
+        // Set up head control button listeners
+        // Z axis for up/down
+        headUpButton.setOnClickListener {
+            // Execute on a background thread
+            QiThreadPool.execute(Callable {
+                moveHead(0.0, 0.0, POSITION_INCREMENT)
+                Log.d(TAG, "Up button pressed - increasing Z coordinate")
+                null
+            })
         }
         
-        danceButton.setOnClickListener {
-            playAnimation(danceAnimate, "Dance")
+        headDownButton.setOnClickListener {
+            QiThreadPool.execute(Callable {
+                moveHead(0.0, 0.0, -POSITION_INCREMENT)
+                Log.d(TAG, "Down button pressed - decreasing Z coordinate")
+                null
+            })
+        }
+        
+        // Y axis for left/right
+        headLeftButton.setOnClickListener {
+            QiThreadPool.execute(Callable {
+                moveHead(0.0, POSITION_INCREMENT, 0.0)
+                Log.d(TAG, "Left button pressed - increasing Y coordinate")
+                null
+            })
+        }
+        
+        headRightButton.setOnClickListener {
+            QiThreadPool.execute(Callable {
+                moveHead(0.0, -POSITION_INCREMENT, 0.0)
+                Log.d(TAG, "Right button pressed - decreasing Y coordinate")
+                null
+            })
         }
     }
     
@@ -68,34 +121,21 @@ class MainActivity : RobotActivity(), RobotLifecycleCallbacks {
         // Store the QiContext for later use
         this.qiContext = qiContext
         
-        // Preload all animations in onRobotFocusGained
-        preloadAnimations(qiContext)
+        // Disable autonomous abilities that might interfere with head movement
+        disableAutonomousAbilities(qiContext)
         
-        // Start the human engagement process
-        startHumanEngagement()
-        
-        // Remove or move to different thread, onRobotFocusGained runs on a different thread than the
-        // main UI thread.
-//        responseTextView.text = "Ready to play animations!"
-
-        /* 
-        // Original implementation - commented out as requested
-        // Start the API request as soon as the activity is created
-        fetchHealthEndpoint()
-        */
+        // Initialize head movement
+        initializeHeadControl(qiContext)
     }
     
     override fun onRobotFocusLost() {
-        // Stop engaging with humans
-        stopHumanEngagement()
+        // Re-enable autonomous abilities
+        releaseAutonomousAbilities()
         
-        // Clean up resources
-        raiseHandsAnimate?.removeAllOnStartedListeners()
-        danceAnimate?.removeAllOnStartedListeners()
-        currentAnimate = null
-        raiseHandsAnimate = null
-        danceAnimate = null
-        isAnimationRunning = false
+        // Clean up head movement resources
+        cancelHeadMovement()
+        lookAt = null
+        targetFrame = null
         
         // Reset QiContext
         this.qiContext = null
@@ -103,90 +143,177 @@ class MainActivity : RobotActivity(), RobotLifecycleCallbacks {
     
     override fun onRobotFocusRefused(reason: String) {
         // Handle focus refused
-        runOnUiThread {
-            "Robot focus refused: $reason".also { responseTextView.text = it }
+        Log.e(TAG, "Robot focus refused: $reason")
+    }
+    
+    // =============== Autonomous Abilities functions ===============
+    
+    private fun disableAutonomousAbilities(qiContext: QiContext) {
+        try {
+            // Create a holder for the autonomous abilities
+            autonomousAbilitiesHolder = HolderBuilder.with(qiContext)
+                .withAutonomousAbilities(
+                    AutonomousAbilitiesType.BACKGROUND_MOVEMENT,
+                    AutonomousAbilitiesType.BASIC_AWARENESS,
+                    AutonomousAbilitiesType.AUTONOMOUS_BLINKING
+                )
+                .build()
+            
+            // Hold the abilities (disables them) asynchronously
+            autonomousAbilitiesHolder?.async()?.hold()?.thenConsume { future ->
+                if (future.isSuccess) {
+                    Log.i(TAG, "Autonomous abilities have been disabled")
+                } else if (future.hasError()) {
+                    Log.e(TAG, "Error disabling autonomous abilities: ${future.error.message}")
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error setting up autonomous abilities holder: ${e.message}")
         }
     }
     
-    private fun preloadAnimations(qiContext: QiContext) {
+    private fun releaseAutonomousAbilities() {
         try {
-            // Load the raise hands animation
-            val raiseHandsAnimation = AnimationBuilder.with(qiContext)
-                .withResources(R.raw.raise_both_hands_b001)
-                .build()
-                
-            // Create the animate action for raise hands
-            raiseHandsAnimate = AnimateBuilder.with(qiContext)
-                .withAnimation(raiseHandsAnimation)
-                .build()
-                
-            // Load the dance animation
-            val danceAnimation = AnimationBuilder.with(qiContext)
-                .withResources(R.raw.dance_b001)
-                .build()
-                
-            // Create the animate action for dance
-            danceAnimate = AnimateBuilder.with(qiContext)
-                .withAnimation(danceAnimation)
-                .build()
-                
-            // Enable buttons when animations are loaded
-            runOnUiThread {
-                raiseHandsButton.isEnabled = true
-                danceButton.isEnabled = true
+            // Release the holder to re-enable autonomous abilities
+            autonomousAbilitiesHolder?.async()?.release()?.thenConsume { future ->
+                if (future.isSuccess) {
+                    Log.i(TAG, "Autonomous abilities have been re-enabled")
+                } else if (future.hasError()) {
+                    Log.e(TAG, "Error re-enabling autonomous abilities: ${future.error.message}")
+                }
             }
             
+            // Reset the holder
+            autonomousAbilitiesHolder = null
         } catch (e: Exception) {
-            Log.e(TAG, "Error loading animations: ${e.message}")
-            runOnUiThread {
-                responseTextView.text = "Error loading animations: ${e.message}"
-            }
+            Log.e(TAG, "Error releasing autonomous abilities: ${e.message}")
         }
     }
     
-    private fun playAnimation(animate: Animate?, animationName: String) {
-        Log.d(TAG, "currently in playAnimation(Animate?, String)")
+    // =============== Head movement functions ===============
 
-        // Check if an animation is already running
-        if (isAnimationRunning) {
-            responseTextView.text = "Animation already running, please wait..."
-            return
-        }
-        
-        if (animate == null) {
-            responseTextView.text = "Animation not loaded. Try again later."
-            return
-        }
-        
-        // Show progress indicator
-        progressBar.visibility = View.VISIBLE
-        responseTextView.text = "Starting $animationName animation..."
-        
-        // Store current animate action
-        currentAnimate = animate
-        
-        // Mark animation as running
-        isAnimationRunning = true
-        
-        // Run the animation asynchronously
-        animate.async().run().thenConsume { future ->
-            isAnimationRunning = false
-            runOnUiThread {
-                if (future.isSuccess) {
-                    responseTextView.text = "$animationName animation completed"
-                } else if (future.hasError()) {
-                    val error = future.error
-                    Log.e(TAG, "Error during animation: ${error.message}")
-                    responseTextView.text = "Animation error: ${error.message}"
-                }
-                progressBar.visibility = View.GONE
+    private fun initializeHeadControl(qiContext: QiContext) {
+        try {
+            // All operations that use QiContext should be done asynchronously
+            QiThreadPool.execute(Callable {
+                // Get the Actuation service from QiContext
+                val actuation = qiContext.actuation
                 
-                // Remove the listener after animation completes
-                animate.removeAllOnStartedListeners()
+                // Get the robot frame as the reference frame
+                val robotFrame = actuation.robotFrame()
+                
+                // Store the robot frame for reuse
+                targetFrame = robotFrame
+                
+                // Initial head positioning
+                createLookAtAction(qiContext)
+                
+                // Enable buttons on UI thread
+                runOnUiThread {
+                    headUpButton.isEnabled = true
+                    headDownButton.isEnabled = true
+                    headLeftButton.isEnabled = true
+                    headRightButton.isEnabled = true
+                }
+                
+                Log.d(TAG, "Head control initialized successfully")
+                Log.d(TAG, "Initial head position: X=${headPositionX}, Y=${headPositionY}, Z=${headPositionZ}")
+                
+                return@Callable null
+            })
+        } catch (e: Exception) {
+            Log.e(TAG, "Error initializing head control: ${e.message}")
+        }
+    }
+    
+    private fun createLookAtAction(qiContext: QiContext) {
+        try {
+            // Get the Actuation service
+            val actuation = qiContext.actuation
+            
+            // Get the robot frame
+            val robotFrame = actuation.robotFrame()
+            
+            // Create a transform for the current head position
+            // Use 3D vector for proper positioning including Z height
+            val vector3 = Vector3(headPositionX, headPositionY, headPositionZ)
+            Log.d(TAG, "Creating transform with vector: (${vector3.getX()}, ${vector3.getY()}, ${vector3.getZ()})")
+            
+            val transform = TransformBuilder.create()
+                .fromTranslation(vector3)
+            
+            // Get the Mapping service
+            val mapping = qiContext.mapping
+            
+            // Create a FreeFrame with the Mapping service
+            val freeFrame = mapping.makeFreeFrame()
+            
+            // Update the target location
+            freeFrame.update(robotFrame, transform, 0L)
+            Log.d(TAG, "FreeFrame updated successfully")
+            
+            // Store the frame for later use
+            targetFrame = freeFrame.frame()
+            
+            // Create a LookAt action
+            lookAt = LookAtBuilder.with(qiContext)
+                .withFrame(targetFrame)
+                .build()
+            
+            // Set the policy to move only the head
+            lookAt?.policy = LookAtMovementPolicy.HEAD_ONLY
+            Log.d(TAG, "LookAt action created with HEAD_ONLY policy")
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "Error creating LookAt action: ${e.message}")
+            e.printStackTrace()
+        }
+    }
+    
+    private fun moveHead(deltaX: Double, deltaY: Double, deltaZ: Double) {
+        // Cancel any existing head movement
+        cancelHeadMovement()
+        
+        qiContext?.let { context ->
+            try {
+                // Update position coordinates
+                headPositionX += deltaX
+                headPositionY += deltaY
+                headPositionZ += deltaZ
+                
+                Log.d(TAG, "Moving head to position: X=${headPositionX}, Y=${headPositionY}, Z=${headPositionZ}")
+                
+                // Create a new LookAt action with updated position
+                createLookAtAction(context)
+                
+                // Execute the LookAt action asynchronously
+                lookAtFuture = lookAt?.async()?.run()
+                
+                // Add completion handler
+                lookAtFuture?.thenConsume { future ->
+                    if (future.hasError()) {
+                        Log.e(TAG, "Error during head movement: ${future.error.message}")
+                    } else if (future.isSuccess) {
+                        Log.d(TAG, "Head movement completed successfully")
+                    } else if (future.isCancelled) {
+                        Log.d(TAG, "Head movement was canceled")
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error moving head: ${e.message}")
+                e.printStackTrace()
             }
         }
     }
     
+    private fun cancelHeadMovement() {
+        // Cancel any ongoing head movement
+        lookAtFuture?.requestCancellation()
+        lookAtFuture = null
+        Log.d(TAG, "Canceled previous head movement")
+    }
+    
+    /*
     // =============== Human engagement functions ===============
     
     private fun startHumanEngagement() {
@@ -307,74 +434,6 @@ class MainActivity : RobotActivity(), RobotLifecycleCallbacks {
                 }
             }
         }
-    }
-    
-    /*
-    // Original implementation - commented out as requested
-    private fun fetchHealthEndpoint() {
-        progressBar.visibility = View.VISIBLE
-        
-        val request = Request.Builder()
-            .url(serverUrl)
-            .build()
-            
-        client.newCall(request).enqueue(object : Callback {
-            override fun onFailure(call: Call, e: IOException) {
-                runOnUiThread {
-                    progressBar.visibility = View.GONE
-                    val errorMessage = "Error: ${e.message}"
-                    responseTextView.text = errorMessage
-                    
-                    // Speak the error message if QiContext is available
-                    qiContext?.let { context ->
-                        speakText(context, errorMessage)
-                    }
-                }
-            }
-            
-            override fun onResponse(call: Call, response: Response) {
-                val responseText = response.body?.string() ?: "No response body"
-
-                // Try to directly say a simple phrase to test if speech works regardless of directory issues
-                try {
-                    val testPhrase = Phrase("Here is what I got from the endpoint: $responseText")
-                    val say = SayBuilder.with(qiContext)
-                        .withPhrase(testPhrase)
-                        .build()
-                        
-                    // Execute in a separate thread to avoid blocking UI
-                    Thread {
-                        try {
-                            say.run()
-                        } catch (e: Exception) {
-                            runOnUiThread {
-                                Log.e("PepperApp", "Error during test speech: ${e.message}")
-                            }
-                        }
-                    }.start()
-                } catch (e: Exception) {
-                    Log.e("PepperApp", "Error creating test speech: ${e.message}")
-                }
-                
-                runOnUiThread {
-                    progressBar.visibility = View.GONE
-                    responseTextView.text = responseText
-                }
-            }
-        })
-    }
-    
-    private fun speakText(qiContext: QiContext, text: String) {
-        // Create a phrase with the text to say
-        val phrase = Phrase(text)
-        
-        // Build the say action
-        val say = SayBuilder.with(qiContext)
-            .withPhrase(phrase)
-            .build()
-        
-        // Execute the say action
-        say.run()
     }
     */
 }
