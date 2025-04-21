@@ -31,6 +31,7 @@ class PepperCameraManager(private val frameListener: FrameListener) {
     private var captureTask: ScheduledFuture<*>? = null
     private val isCapturing = AtomicBoolean(false)
     private val isPaused = AtomicBoolean(false)
+    private val isCapturingFrame = AtomicBoolean(false)
     
     /**
      * Initialize the camera with QiContext
@@ -63,6 +64,7 @@ class PepperCameraManager(private val frameListener: FrameListener) {
         }
         
         isPaused.set(false)
+        isCapturingFrame.set(false)
         
         Log.d(TAG, "Starting camera capture at $TARGET_FPS FPS")
         captureTask = executor.scheduleAtFixedRate(
@@ -81,6 +83,7 @@ class PepperCameraManager(private val frameListener: FrameListener) {
         captureTask?.cancel(false)
         captureTask = null
         isCapturing.set(false)
+        isCapturingFrame.set(false)
     }
     
     /**
@@ -117,11 +120,17 @@ class PepperCameraManager(private val frameListener: FrameListener) {
             return
         }
         
+        if (isCapturingFrame.getAndSet(true)) {
+            Log.d(TAG, "Skipping frame capture - previous capture still in progress")
+            return
+        }
+        
         try {
             takePicture?.async()?.run()?.thenConsume { future ->
+                isCapturingFrame.set(false)
+                
                 if (!future.isCancelled) {
                     if (!future.hasError()) {
-                        // Process the image if successful
                         processImage(future.get())
                     } else {
                         Log.e(TAG, "Error taking picture: ${future.error.message}")
@@ -129,6 +138,7 @@ class PepperCameraManager(private val frameListener: FrameListener) {
                 }
             }
         } catch (e: Exception) {
+            isCapturingFrame.set(false)
             Log.e(TAG, "Exception during frame capture", e)
         }
     }
@@ -147,8 +157,11 @@ class PepperCameraManager(private val frameListener: FrameListener) {
             val imageData = ByteArray(size)
             buffer.get(imageData)
             
+            // Get image timestamp
+            val timestamp = timestampedImageHandle.time
+            
             // Notify the listener
-            frameListener.onFrameCaptured(imageData)
+            frameListener.onFrameCaptured(imageData, timestamp)
             
         } catch (e: Exception) {
             Log.e(TAG, "Error processing image", e)
@@ -159,6 +172,6 @@ class PepperCameraManager(private val frameListener: FrameListener) {
      * Interface for frame listeners
      */
     interface FrameListener {
-        fun onFrameCaptured(imageData: ByteArray)
+        fun onFrameCaptured(imageData: ByteArray, timestamp: Long = System.currentTimeMillis())
     }
 } 

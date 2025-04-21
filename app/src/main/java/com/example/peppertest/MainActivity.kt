@@ -1,9 +1,12 @@
 package com.example.peppertest
 
+import android.content.Context
 import android.graphics.Color
 import android.os.Bundle
 import android.util.Log
 import android.view.View
+import android.widget.EditText
+import androidx.appcompat.app.AlertDialog
 import com.aldebaran.qi.Future
 import com.aldebaran.qi.sdk.QiContext
 import com.aldebaran.qi.sdk.QiSDK
@@ -24,6 +27,8 @@ import com.example.peppertest.command.CommandDispatcher
 import com.example.peppertest.websocket.PepperWebSocketClient
 import kotlinx.android.synthetic.main.activity_main.*
 import org.json.JSONObject
+import java.util.Timer
+import java.util.TimerTask
 import java.util.concurrent.TimeUnit
 
 class MainActivity : RobotActivity(), RobotLifecycleCallbacks, 
@@ -33,7 +38,7 @@ class MainActivity : RobotActivity(), RobotLifecycleCallbacks,
                      
     companion object {
         private const val TAG = "PepperMainActivity"
-        private const val WEBSOCKET_URL = "ws://10.22.9.224:3000/pepper"
+        private const val WEBSOCKET_URL = "ws://10.22.25.94:5001/pepper"
     }
     
     private var qiContext: QiContext? = null
@@ -57,6 +62,9 @@ class MainActivity : RobotActivity(), RobotLifecycleCallbacks,
     private var humanEngagementFuture: Future<Void>? = null
     private var engageHuman: EngageHuman? = null
     private var humanCheckTaskRunning = false
+    
+    // Add reconnection timer
+    private var reconnectionTimer: Timer? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -64,6 +72,22 @@ class MainActivity : RobotActivity(), RobotLifecycleCallbacks,
         
         // Initialize WebSocket client
         webSocketClient = PepperWebSocketClient(WEBSOCKET_URL, this, this)
+        
+        // Load saved WebSocket URL from preferences
+        val sharedPreferences = getSharedPreferences("PepperSettings", Context.MODE_PRIVATE)
+        val savedUrl = sharedPreferences.getString("websocket_url", WEBSOCKET_URL)
+        if (savedUrl != WEBSOCKET_URL) {
+            // Use saved URL if different from default
+            webSocketClient.setServerUrl(savedUrl!!)
+            Log.d(TAG, "Using saved WebSocket URL: $savedUrl")
+        }
+        
+        // Add a button to the layout for settings if needed
+        // For example, you could add a long-press listener to an existing button:
+        responseTextView.setOnLongClickListener {
+            showServerSettings()
+            true
+        }
         
         // Initialize camera manager
         cameraManager = PepperCameraManager(this)
@@ -82,7 +106,39 @@ class MainActivity : RobotActivity(), RobotLifecycleCallbacks,
         }
     }
     
+    private fun showServerSettings() {
+        val input = EditText(this)
+        input.setText(webSocketClient.getServerUrl())
+        
+        AlertDialog.Builder(this)
+            .setTitle("Server Settings")
+            .setMessage("Enter WebSocket Server URL:")
+            .setView(input)
+            .setPositiveButton("Save") { _, _ ->
+                val url = input.text.toString()
+                // Save to preferences
+                getSharedPreferences("PepperSettings", Context.MODE_PRIVATE)
+                    .edit()
+                    .putString("websocket_url", url)
+                    .apply()
+                
+                // Apply the new URL immediately
+                webSocketClient.setServerUrl(url)
+                
+                // Notify user
+                runOnUiThread {
+                    responseTextView.text = "Server URL updated to: $url"
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+    
     override fun onDestroy() {
+        // Stop reconnection attempts
+        reconnectionTimer?.cancel()
+        reconnectionTimer = null
+        
         // Clean up resources
         webSocketClient.disconnect()
         cameraManager.release()
@@ -150,32 +206,63 @@ class MainActivity : RobotActivity(), RobotLifecycleCallbacks,
     
     override fun onConnected() {
         Log.d(TAG, "WebSocket connected")
-        runOnUiThread {
-            statusTextView.text = "Connected"
-            statusTextView.setTextColor(Color.GREEN)
-        }
+//        runOnUiThread {
+//            statusTextView.text = "Connected"
+//            statusTextView.setTextColor(Color.GREEN)
+//        }
+        
+        // Cancel reconnection timer if it's running
+        reconnectionTimer?.cancel()
+        reconnectionTimer = null
         
         // Start camera capture when connected
         cameraManager.startCapture()
+        
+        // Send a timestamp message to measure latency
+        try {
+            val timestamp = System.currentTimeMillis()
+            val message = JSONObject().apply {
+                put("type", "timestamp")
+                put("timestamp", timestamp)
+            }
+            webSocketClient.sendMessage(message.toString())
+            Log.d(TAG, "Sent timestamp message for latency measurement")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error sending timestamp message", e)
+        }
     }
     
     override fun onDisconnected() {
         Log.d(TAG, "WebSocket disconnected")
-        runOnUiThread {
-            statusTextView.text = "Disconnected"
-            statusTextView.setTextColor(Color.RED)
-        }
+//        runOnUiThread {
+//            statusTextView.text = "Disconnected"
+//            statusTextView.setTextColor(Color.RED)
+//        }
         
         // Pause camera capture when disconnected
         cameraManager.pauseCapture()
+        
+        // Start reconnection timer if not already running
+        if (reconnectionTimer == null) {
+            reconnectionTimer = Timer()
+            reconnectionTimer?.schedule(object : TimerTask() {
+                override fun run() {
+                    // Try to reconnect
+                    if (webSocketClient != null) {
+                        Log.d(TAG, "Attempting to reconnect to WebSocket server...")
+                        webSocketClient.connect()
+                    }
+                }
+            }, 5000, 5000) // Try every 5 seconds
+        }
     }
     
     override fun onReconnectFailed() {
         Log.d(TAG, "WebSocket reconnection failed")
-        runOnUiThread {
-            statusTextView.text = "Reconnection Failed"
-            statusTextView.setTextColor(Color.RED)
-        }
+//        runOnUiThread {
+//            statusTextView.text = "Reconnection Failed"
+//            statusTextView.setTextColor(Color.RED)
+//        }
         
         // Stop camera capture when reconnection fails
         cameraManager.stopCapture()
@@ -185,9 +272,20 @@ class MainActivity : RobotActivity(), RobotLifecycleCallbacks,
     // Frame Listener Implementation
     //
     
-    override fun onFrameCaptured(imageData: ByteArray) {
+    override fun onFrameCaptured(imageData: ByteArray, timestamp: Long) {
         // Send the frame over WebSocket
         webSocketClient.sendCameraFrame(imageData)
+        
+        // Send a timestamp message for latency tracking
+        try {
+            val message = JSONObject().apply {
+                put("type", "frameTimestamp")
+                put("timestamp", timestamp)
+            }
+            webSocketClient.sendMessage(message.toString())
+        } catch (e: Exception) {
+            Log.e(TAG, "Error sending timestamp", e)
+        }
     }
     
     //

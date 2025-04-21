@@ -17,7 +17,7 @@ import java.util.concurrent.atomic.AtomicInteger
  * - Receiving and dispatching commands
  */
 class PepperWebSocketClient(
-    private val serverUrl: String,
+    private var serverUrl: String,
     private val commandListener: CommandListener,
     private val connectionStateListener: ConnectionStateListener
 ) {
@@ -30,6 +30,10 @@ class PepperWebSocketClient(
 
     private val client: OkHttpClient = OkHttpClient.Builder()
         .pingInterval(30, TimeUnit.SECONDS)
+        .connectTimeout(10, TimeUnit.SECONDS)
+        .readTimeout(10, TimeUnit.SECONDS)
+        .writeTimeout(10, TimeUnit.SECONDS)
+        .retryOnConnectionFailure(true)
         .build()
     
     private var webSocket: WebSocket? = null
@@ -38,6 +42,33 @@ class PepperWebSocketClient(
     private val retryCount = AtomicInteger(0)
     private var reconnectJob: Runnable? = null
     private val handler = Handler(Looper.getMainLooper())
+    private var lastPongTime: Long = 0
+    
+    /**
+     * Get the current server URL
+     */
+    fun getServerUrl(): String {
+        return serverUrl
+    }
+    
+    /**
+     * Set a new server URL
+     * Note: This requires disconnecting and reconnecting to take effect
+     */
+    fun setServerUrl(url: String) {
+        Log.d(TAG, "Changing server URL from $serverUrl to $url")
+        
+        // Disconnect from current server if connected
+        if (isConnected.get()) {
+            disconnect()
+        }
+        
+        // Update URL
+        serverUrl = url
+        
+        // Reconnect to new URL
+        connect()
+    }
     
     /**
      * Connect to the WebSocket server
@@ -50,11 +81,15 @@ class PepperWebSocketClient(
         
         isConnecting.set(true)
         
+        // Build the request with proper headers for WebSocket connection
         val request = Request.Builder()
             .url(serverUrl)
+            .header("Connection", "Upgrade")
+            .header("Upgrade", "websocket")
+            .header("Sec-WebSocket-Protocol", "pepper")  // Add subprotocol to help identify the client
             .build()
             
-        Log.d(TAG, "Connecting to WebSocket: $serverUrl")
+        Log.d(TAG, "Connecting to WebSocket: $serverUrl with headers: ${request.headers}")
         webSocket = client.newWebSocket(request, createWebSocketListener())
     }
     
@@ -108,10 +143,23 @@ class PepperWebSocketClient(
     private fun createWebSocketListener(): WebSocketListener {
         return object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
-                Log.d(TAG, "WebSocket connection opened")
+                Log.d(TAG, "WebSocket connection opened. Response: ${response.code} ${response.message}")
+                Log.d(TAG, "Response headers: ${response.headers}")
                 isConnected.set(true)
                 isConnecting.set(false)
                 retryCount.set(0)
+                
+                // Send initial ping to verify connection is working
+                try {
+                    val pingMessage = JSONObject().apply {
+                        put("type", "ping")
+                        put("timestamp", System.currentTimeMillis())
+                    }
+                    webSocket.send(pingMessage.toString())
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error sending initial ping", e)
+                }
+                
                 connectionStateListener.onConnected()
             }
             
@@ -129,7 +177,7 @@ class PepperWebSocketClient(
                         Log.d(TAG, "Received pong response")
                         lastPongTime = System.currentTimeMillis()
                     } else {
-                        Log.d(TAG, "Received unknown message type")
+                        Log.d(TAG, "Received unknown message type: ${json.optString("type", "no type")}")
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "Error parsing message", e)
@@ -138,16 +186,16 @@ class PepperWebSocketClient(
             
             override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
                 // We don't expect binary messages from the server
-                Log.d(TAG, "Received binary message from server")
+                Log.d(TAG, "Received binary message from server: ${bytes.size} bytes")
             }
             
             override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
-                Log.d(TAG, "WebSocket closing: $code - $reason")
+                Log.d(TAG, "WebSocket closing: code=$code, reason='$reason'")
                 webSocket.close(NORMAL_CLOSURE_STATUS, null)
             }
             
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                Log.d(TAG, "WebSocket closed: $code - $reason")
+                Log.d(TAG, "WebSocket closed: code=$code, reason='$reason'")
                 isConnected.set(false)
                 isConnecting.set(false)
                 connectionStateListener.onDisconnected()
@@ -158,7 +206,11 @@ class PepperWebSocketClient(
             }
             
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                Log.e(TAG, "WebSocket failure", t)
+                Log.e(TAG, "WebSocket failure: ${t.message}", t)
+                if (response != null) {
+                    Log.e(TAG, "Response: ${response.code} ${response.message}")
+                    Log.e(TAG, "Response headers: ${response.headers}")
+                }
                 isConnected.set(false)
                 isConnecting.set(false)
                 connectionStateListener.onDisconnected()
