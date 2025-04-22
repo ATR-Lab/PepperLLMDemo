@@ -6,6 +6,12 @@ import os
 from datetime import datetime
 import sys
 import websockets
+import cv2
+import numpy as np
+import uuid
+
+# Global settings
+FACE_DETECTION_ENABLED = False
 
 # Check websockets version and add version-specific imports
 WEBSOCKETS_VERSION = websockets.__version__
@@ -47,6 +53,7 @@ class PepperServer:
         self.clients = set()
         self.pepper_connection = None
         self.latest_frame = None
+        self.latest_face_data = None
     
     def get_ip_address(self):
         """Get the local IP address for network connectivity"""
@@ -71,7 +78,7 @@ class PepperServer:
         
         try:
             async for message in websocket:
-                # If message is from Pepper, it's a camera frame
+                # If message is from Pepper, it's a camera frame or JSON data
                 if isinstance(message, bytes):
                     # Store the latest frame
                     self.latest_frame = message
@@ -82,11 +89,36 @@ class PepperServer:
                             *[client.send(message) for client in self.clients],
                             return_exceptions=True
                         )
-                # Handle JSON messages from Pepper
+                        
+                        # If we have face data from Pepper, send it after the frame
+                        if self.latest_face_data and FACE_DETECTION_ENABLED:
+                            await asyncio.gather(
+                                *[client.send(json.dumps(self.latest_face_data)) for client in self.clients],
+                                return_exceptions=True
+                            )
+                
+                # Handle JSON messages from Pepper (commands and face detection data)
                 elif isinstance(message, str):
                     try:
                         data = json.loads(message)
                         logger.debug(f"Received message from Pepper: {data}")
+                        
+                        # If message is face detection data
+                        if data.get("type") == "face_detection" and data.get("source") == "pepper_sdk":
+                            logger.info(f"Received face detection data from Pepper: {len(data.get('faces', []))} faces")
+                            
+                            # Store the latest face data
+                            self.latest_face_data = data
+                            
+                            # Forward face data to clients if face detection is enabled
+                            if self.clients and FACE_DETECTION_ENABLED:
+                                await asyncio.gather(
+                                    *[client.send(message) for client in self.clients],
+                                    return_exceptions=True
+                                )
+                        # Other types of messages
+                        else:
+                            logger.debug(f"Received other message type: {data.get('type')}")
                     except json.JSONDecodeError:
                         logger.warning(f"Received invalid JSON from Pepper")
         
@@ -104,6 +136,8 @@ class PepperServer:
     
     async def handle_client(self, websocket):
         """Handle WebSocket connections from regular clients"""
+        global FACE_DETECTION_ENABLED
+        
         client_id = f"client-{id(websocket)}"
         logger.info(f"Webcam client connected: {client_id}")
         
@@ -118,8 +152,36 @@ class PepperServer:
                         command = json.loads(message)
                         logger.info(f"Received command from client {client_id}: {command}")
                         
-                        # Forward command to Pepper if connected
-                        if self.pepper_connection:
+                        # Handle face detection toggle command
+                        if command.get("type") == "face_detection":
+                            action = command.get("action")
+                            if action == "enable":
+                                FACE_DETECTION_ENABLED = True
+                                logger.info("Face detection enabled")
+                                # Send confirmation to the client
+                                await websocket.send(json.dumps({"type": "face_detection", "status": "enabled"}))
+                                
+                                # Forward the face detection enable command to Pepper
+                                if self.pepper_connection:
+                                    logger.info("Forwarding face detection enable command to Pepper")
+                                    await self.pepper_connection.send(json.dumps(command))
+                                
+                                # If we have face data and just enabled detection, send it
+                                if self.latest_face_data:
+                                    await websocket.send(json.dumps(self.latest_face_data))
+                            elif action == "disable":
+                                FACE_DETECTION_ENABLED = False
+                                logger.info("Face detection disabled")
+                                # Send confirmation to the client
+                                await websocket.send(json.dumps({"type": "face_detection", "status": "disabled"}))
+                                
+                                # Forward the face detection disable command to Pepper
+                                if self.pepper_connection:
+                                    logger.info("Forwarding face detection disable command to Pepper")
+                                    await self.pepper_connection.send(json.dumps(command))
+                        
+                        # Forward other commands to Pepper if connected
+                        elif self.pepper_connection:
                             await self.pepper_connection.send(json.dumps(command))
                         else:
                             logger.warning("Cannot forward command: Pepper not connected")

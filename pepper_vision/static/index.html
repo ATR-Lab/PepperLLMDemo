@@ -27,11 +27,18 @@
             width: 100%;
             text-align: center;
             margin: 20px 0;
+            position: relative;
         }
         #video-feed {
             max-width: 100%;
             border: 1px solid #ddd;
             background-color: #eee;
+        }
+        #face-canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            pointer-events: none;
         }
         .controls {
             margin-top: 20px;
@@ -73,6 +80,22 @@
         button:hover {
             background-color: #45a049;
         }
+        button.toggle-off {
+            background-color: #f44336;
+        }
+        button.toggle-off:hover {
+            background-color: #d32f2f;
+        }
+        .face-info {
+            position: absolute;
+            top: 0;
+            left: 0;
+            background-color: rgba(0, 0, 0, 0.5);
+            color: white;
+            font-size: 12px;
+            padding: 2px 4px;
+            border-radius: 3px;
+        }
         input[type="text"] {
             padding: 10px;
             width: 100%;
@@ -86,6 +109,27 @@
         }
         .server-input input {
             flex-grow: 1;
+        }
+        .face-controls {
+            margin-top: 20px;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            background-color: #f9f9f9;
+        }
+        .face-stats {
+            margin-top: 10px;
+            font-size: 14px;
+            color: #666;
+        }
+        .control-group {
+            margin-top: 10px;
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+        .control-label {
+            min-width: 120px;
         }
     </style>
 </head>
@@ -102,6 +146,16 @@
         
         <div class="video-container">
             <img id="video-feed" width="640" height="480" alt="Pepper Camera Feed">
+            <canvas id="face-canvas" width="640" height="480"></canvas>
+        </div>
+        
+        <div class="face-controls">
+            <h3>Face Detection</h3>
+            <button id="face-detection-btn" class="toggle-off">Enable Face Detection</button>
+            <div class="face-stats">
+                <div>Detected faces: <span id="face-count">0</span></div>
+                <div>Data source: <span id="face-source">Pepper SDK</span></div>
+            </div>
         </div>
         
         <div class="controls">
@@ -125,9 +179,13 @@
     <script>
         let socket = null;
         let isConnected = false;
+        let faceDetectionEnabled = false;
+        let currentFaces = [];
         
         // DOM elements
         const videoFeed = document.getElementById('video-feed');
+        const faceCanvas = document.getElementById('face-canvas');
+        const faceContext = faceCanvas.getContext('2d');
         const statusBar = document.getElementById('status-bar');
         const serverUrlInput = document.getElementById('server-url');
         const connectBtn = document.getElementById('connect-btn');
@@ -139,6 +197,9 @@
         const backwardBtn = document.getElementById('backward-btn');
         const turnLeftBtn = document.getElementById('turn-left-btn');
         const turnRightBtn = document.getElementById('turn-right-btn');
+        const faceDetectionBtn = document.getElementById('face-detection-btn');
+        const faceCountEl = document.getElementById('face-count');
+        const faceSourceEl = document.getElementById('face-source');
         
         // Auto-detect server IP (same subnet as client)
         function autoDetectServerUrl() {
@@ -155,6 +216,18 @@
             const autoUrl = autoDetectServerUrl();
             serverUrlInput.value = autoUrl;
             
+            // Connect canvas size to video size
+            function updateCanvasSize() {
+                const rect = videoFeed.getBoundingClientRect();
+                faceCanvas.width = rect.width;
+                faceCanvas.height = rect.height;
+            }
+            
+            // Update canvas size on window resize
+            window.addEventListener('resize', updateCanvasSize);
+            videoFeed.addEventListener('load', updateCanvasSize);
+            
+            // Set up event listeners
             connectBtn.addEventListener('click', connectToServer);
             sayBtn.addEventListener('click', sayCommand);
             waveBtn.addEventListener('click', () => animateCommand('wave'));
@@ -163,6 +236,124 @@
             backwardBtn.addEventListener('click', () => moveCommand(-1, 0, 0));
             turnLeftBtn.addEventListener('click', () => moveCommand(0, 0, 1));
             turnRightBtn.addEventListener('click', () => moveCommand(0, 0, -1));
+            
+            // Face detection controls
+            faceDetectionBtn.addEventListener('click', toggleFaceDetection);
+        }
+        
+        // Toggle face detection
+        function toggleFaceDetection() {
+            if (!isConnected) {
+                alert('Please connect to the server first');
+                return;
+            }
+            
+            faceDetectionEnabled = !faceDetectionEnabled;
+            
+            if (faceDetectionEnabled) {
+                enableFaceDetection();
+                faceDetectionBtn.textContent = 'Disable Face Detection';
+                faceDetectionBtn.classList.remove('toggle-off');
+            } else {
+                disableFaceDetection();
+                faceDetectionBtn.textContent = 'Enable Face Detection';
+                faceDetectionBtn.classList.add('toggle-off');
+                clearFaceCanvas();
+            }
+        }
+        
+        // Enable face detection on the server
+        function enableFaceDetection() {
+            const command = {
+                type: 'face_detection',
+                action: 'enable'
+            };
+            
+            socket.send(JSON.stringify(command));
+        }
+        
+        // Disable face detection on the server
+        function disableFaceDetection() {
+            const command = {
+                type: 'face_detection',
+                action: 'disable'
+            };
+            
+            socket.send(JSON.stringify(command));
+        }
+        
+        // Draw face rectangles on the canvas
+        function drawFaces(faces) {
+            if (!faces || faces.length === 0) {
+                return;
+            }
+            
+            // Get the scale to map face coordinates to canvas
+            const scaleX = faceCanvas.width / 640;
+            const scaleY = faceCanvas.height / 480;
+            
+            // Clear previous drawings
+            clearFaceCanvas();
+            
+            // Update face count
+            faceCountEl.textContent = faces.length;
+            
+            // Draw each face
+            faces.forEach(face => {
+                const x = face.x * scaleX;
+                const y = face.y * scaleY;
+                const width = face.width * scaleX;
+                const height = face.height * scaleY;
+                
+                // Draw rectangle
+                faceContext.lineWidth = 3;
+                faceContext.strokeStyle = 'rgba(0, 255, 0, 0.8)';
+                faceContext.strokeRect(x, y, width, height);
+                
+                // Draw face ID
+                faceContext.font = '14px Arial';
+                faceContext.fillStyle = 'rgba(0, 255, 0, 0.9)';
+                faceContext.fillText(`ID: ${face.id}`, x, y - 5);
+                
+                // Draw additional attributes if available
+                if (face.attributes) {
+                    let attributeText = '';
+                    let yOffset = y + height + 15;
+                    
+                    // Add age if available
+                    if (face.attributes.age) {
+                        attributeText = `Age: ${face.attributes.age}`;
+                        faceContext.fillText(attributeText, x, yOffset);
+                        yOffset += 15;
+                    }
+                    
+                    // Add gender if available
+                    if (face.attributes.gender) {
+                        attributeText = `Gender: ${face.attributes.gender}`;
+                        faceContext.fillText(attributeText, x, yOffset);
+                        yOffset += 15;
+                    }
+                    
+                    // Add smile state if available
+                    if (face.attributes.smileState) {
+                        attributeText = `Smile: ${face.attributes.smileState}`;
+                        faceContext.fillText(attributeText, x, yOffset);
+                        yOffset += 15;
+                    }
+                    
+                    // Add attention state if available
+                    if (face.attributes.attentionState) {
+                        attributeText = `Attention: ${face.attributes.attentionState}`;
+                        faceContext.fillText(attributeText, x, yOffset);
+                    }
+                }
+            });
+        }
+        
+        // Clear the face detection canvas
+        function clearFaceCanvas() {
+            faceContext.clearRect(0, 0, faceCanvas.width, faceCanvas.height);
+            faceCountEl.textContent = '0';
         }
         
         // Connect to WebSocket server
@@ -201,6 +392,21 @@
                         try {
                             const message = JSON.parse(event.data);
                             console.log('Received message:', message);
+                            
+                            // Handle face detection data
+                            if (message.type === 'face_detection') {
+                                if (message.faces) {
+                                    currentFaces = message.faces;
+                                    drawFaces(message.faces);
+                                    
+                                    // Update source info
+                                    if (message.source) {
+                                        faceSourceEl.textContent = message.source;
+                                    }
+                                } else if (message.status) {
+                                    console.log(`Face detection ${message.status}`);
+                                }
+                            }
                         } catch (error) {
                             console.error('Invalid JSON message:', event.data);
                         }
@@ -209,9 +415,13 @@
                 
                 socket.onclose = () => {
                     isConnected = false;
+                    faceDetectionEnabled = false;
                     statusBar.textContent = 'Disconnected from server';
                     statusBar.className = 'status disconnected';
                     connectBtn.textContent = 'Connect';
+                    faceDetectionBtn.textContent = 'Enable Face Detection';
+                    faceDetectionBtn.classList.add('toggle-off');
+                    clearFaceCanvas();
                 };
                 
                 socket.onerror = (error) => {

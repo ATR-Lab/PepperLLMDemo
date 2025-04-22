@@ -168,16 +168,31 @@ class PepperWebSocketClient(
                     Log.d(TAG, "Received message: $text")
                     val json = JSONObject(text)
                     
-                    // Check if this is a command message
-                    if (json.has("type") && json.getString("type") == "command") {
-                        Log.d(TAG, "Received command: ${json.getString("action")}")
-                        commandListener.onCommandReceived(json)
-                    } else if (json.has("type") && json.getString("type") == "pong") {
-                        // Handle pong response
-                        Log.d(TAG, "Received pong response")
-                        lastPongTime = System.currentTimeMillis()
+                    // Check message type
+                    if (json.has("type")) {
+                        val type = json.getString("type")
+                        
+                        // Handle different message types
+                        when (type) {
+                            "command" -> {
+                                Log.d(TAG, "Received command: ${json.getString("action")}")
+                                commandListener.onCommandReceived(json)
+                            }
+                            "face_detection" -> {
+                                Log.d(TAG, "Received face detection command: ${json.optString("action", "")}")
+                                commandListener.onCommandReceived(json)
+                            }
+                            "pong" -> {
+                                // Handle pong response
+                                Log.d(TAG, "Received pong response")
+                                lastPongTime = System.currentTimeMillis()
+                            }
+                            else -> {
+                                Log.d(TAG, "Received unknown message type: $type")
+                            }
+                        }
                     } else {
-                        Log.d(TAG, "Received unknown message type: ${json.optString("type", "no type")}")
+                        Log.d(TAG, "Received message without type")
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "Error parsing message", e)

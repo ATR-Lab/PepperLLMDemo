@@ -22,7 +22,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 class PepperCameraManager(private val frameListener: FrameListener) {
     companion object {
         private const val TAG = "PepperCameraManager"
-        private const val TARGET_FPS = 10
+        private const val TARGET_FPS = 30
         private const val FRAME_INTERVAL_MS = 1000L / TARGET_FPS
     }
     
