@@ -7,6 +7,7 @@ import android.os.Bundle
 import android.util.Log
 import android.view.View
 import android.widget.EditText
+import android.widget.Switch
 import androidx.appcompat.app.AlertDialog
 import com.aldebaran.qi.Consumer
 import com.aldebaran.qi.Future
@@ -42,13 +43,18 @@ import java.util.Timer
 import java.util.TimerTask
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import com.aldebaran.qi.sdk.`object`.conversation.ConversationStatus
+import com.aldebaran.qi.sdk.`object`.conversation.Listen
+import com.aldebaran.qi.sdk.`object`.conversation.ListenResult
 
 class MainActivity : RobotActivity(), RobotLifecycleCallbacks, 
                      PepperWebSocketClient.CommandListener,
                      PepperWebSocketClient.ConnectionStateListener {
     companion object {
         private const val TAG = "PepperHumanAwareness"
-        private const val DEFAULT_WEBSOCKET_URL = "ws://10.22.25.94:5001/pepper" // Default WebSocket URL
+        private const val DEFAULT_WEBSOCKET_URL = "ws://10.22.25.94:5003/pepper" // Default WebSocket URL
+        private const val SPEAKER_SWITCH_DELAY_MS = 1000 // Delay before switching speakers
+        private const val SPEECH_TIMEOUT_MS = 5000 // Time after speech stops to return to soft engagement
     }
     
     private var qiContext: QiContext? = null
@@ -64,10 +70,22 @@ class MainActivity : RobotActivity(), RobotLifecycleCallbacks,
     private var isEngagementRunning = false
     private var humanAwarenessInitialized = false
     
+    // Conversation tracking properties
+    private var conversationStatus: ConversationStatus? = null
+    private var lastSpeakingHuman: Human? = null
+    private var lastSpeechTimestamp: Long = 0
+    private var isSpeechDetectionActive = false
+    private var currentEngagementPolicy: EngagementPolicy = EngagementPolicy.STRICT
+    
     // WebSocket client
     private var webSocketClient: PepperWebSocketClient? = null
     private var websocketServerUrl = DEFAULT_WEBSOCKET_URL
     private var isSpeaking = AtomicBoolean(false)
+    private var isWebSocketEnabled = false  // Disabled by default
+
+    // Add timer for speech detection timeout
+    private var speechTimeoutTimer: Timer? = null
+    private var speechTimeoutTask: TimerTask? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -79,6 +97,9 @@ class MainActivity : RobotActivity(), RobotLifecycleCallbacks,
         // Initialize WebSocket URL from preferences if available
         websocketServerUrl = getPreferences(Context.MODE_PRIVATE)
             .getString("websocket_url", DEFAULT_WEBSOCKET_URL) ?: DEFAULT_WEBSOCKET_URL
+        
+        // Setup WebSocket toggle
+        setupWebSocketToggle()
     }
 
     override fun onDestroy() {
@@ -103,13 +124,21 @@ class MainActivity : RobotActivity(), RobotLifecycleCallbacks,
         // Initialize human awareness
         initializeHumanAwareness(qiContext)
         
-        // Connect to WebSocket server
-        connectWebSocket()
+        // Only connect to WebSocket if enabled
+        if (isWebSocketEnabled) {
+            connectWebSocket()
+        } else {
+            Log.i(TAG, "WebSocket connection disabled")
+            updateStatus("WebSocket connection disabled")
+        }
     }
     
     override fun onRobotFocusLost() {
         // Stop engagement if running
         stopEngagement()
+        
+        // Clean up conversation tracking
+        cleanupConversationTracking()
         
         // Disconnect WebSocket if connected
         disconnectWebSocket()
@@ -196,6 +225,33 @@ class MainActivity : RobotActivity(), RobotLifecycleCallbacks,
                             }
                             else -> {
                                 Log.d(TAG, "Unhandled action type: $action")
+                            }
+                        }
+                    }
+                }
+                "speech" -> {
+                    // Handle speech messages (direct from server)
+                    if (command.has("action")) {
+                        val action = command.getString("action")
+                        
+                        when (action) {
+                            "say" -> {
+                                // Handle text-to-speech command
+                                if (command.has("text")) {
+                                    val text = command.getString("text")
+                                    if (text.isNotEmpty()) {
+                                        Log.i(TAG, "Speaking text from speech message: $text")
+                                        runOnUiThread {
+                                            updateStatus("Speaking: $text")
+                                        }
+                                        
+                                        // Use animation for server-generated responses to make them more engaging
+                                        sayTextWithAnimation(text)
+                                    }
+                                }
+                            }
+                            else -> {
+                                Log.d(TAG, "Unhandled speech action: $action")
                             }
                         }
                     }
@@ -372,10 +428,183 @@ class MainActivity : RobotActivity(), RobotLifecycleCallbacks,
             Log.i(TAG, "Human awareness initialized successfully")
             updateStatus("Human awareness active - looking for humans")
             
+            // Initialize conversation tracking
+            initializeConversationTracking(qiContext)
+            
         } catch (e: Exception) {
             Log.e(TAG, "Error initializing human awareness: ${e.message}", e)
             updateStatus("Failed to initialize human awareness")
         }
+    }
+    
+    /**
+     * Initialize conversation tracking to detect who is speaking
+     */
+    private fun initializeConversationTracking(qiContext: QiContext) {
+        try {
+            // Get conversation status for this robot context
+            conversationStatus = qiContext.conversation.status(qiContext.robotContext)
+            
+            // Add listener for when speech is detected
+            conversationStatus?.addOnHeardListener { phrase ->
+                // Speech detected - identify which human is speaking
+                onSpeechDetected(phrase)
+            }
+            
+            // Add listener for when robot is speaking
+            conversationStatus?.addOnSayingChangedListener { phrase ->
+                // When robot is speaking, we should maintain focus on the human we're talking to
+                if (phrase.text.isNotEmpty()) {
+                    // Robot is speaking, maintain current focus
+                    Log.d(TAG, "Robot is speaking: ${phrase.text}")
+                } else {
+                    // Robot finished speaking
+                    Log.d(TAG, "Robot finished speaking")
+                }
+            }
+            
+            isSpeechDetectionActive = true
+            Log.i(TAG, "Conversation tracking initialized successfully")
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "Error initializing conversation tracking: ${e.message}", e)
+            isSpeechDetectionActive = false
+        }
+    }
+    
+    /**
+     * Process speech detected from a human
+     */
+    private fun onSpeechDetected(phrase: Phrase) {
+        val currentTimestamp = System.currentTimeMillis()
+        Log.d(TAG, "Speech detected: ${phrase.text}")
+        
+        // Get current list of humans around
+        val humans = humanAwareness?.humansAround ?: return
+        if (humans.isEmpty()) {
+            return
+        }
+        
+        // Attempt to identify which human is speaking
+        val speakingHuman = identifySpeakingHuman(humans, phrase)
+        
+        // If we identified a speaking human and it's different from current focus
+        speakingHuman?.let { human ->
+            // Update last speaking human and timestamp
+            lastSpeakingHuman = human
+            lastSpeechTimestamp = currentTimestamp
+            
+            // Only switch engagement if:
+            // 1. Different from current engaged human
+            // 2. Enough time has passed since last switch (prevent rapid switching)
+            if (human != currentEngagedHuman && 
+                (currentTimestamp - lastSpeechTimestamp > SPEAKER_SWITCH_DELAY_MS)) {
+                
+                Log.i(TAG, "Switching focus to new speaking human")
+                engageWithSpeakingHuman(human)
+            }
+        }
+    }
+    
+    /**
+     * Identify which human is speaking based on engagement cues
+     */
+    private fun identifySpeakingHuman(humans: List<Human>, phrase: Phrase): Human? {
+        // This is a best-effort approach as the SDK doesn't directly tell us which human is speaking
+        
+        if (humans.isNotEmpty()) {
+            // If there's only one fully engaged human, that's likely our speaker
+            if (humans.size == 1) {
+                return humans.first()
+            }
+            
+            // If multiple engaged humans, use the one with higher excitement
+            // (people often get more animated when speaking)
+            val excitedHuman = humans.maxBy {
+                if (it.emotion.excitement == ExcitementState.EXCITED) 3
+                else if (it.emotion.excitement == ExcitementState.CALM) 2
+                else 1
+            }
+            
+            if (excitedHuman != null) {
+                return excitedHuman
+            }
+        }
+        
+        // If no strong indicators, default to first human or current engaged human
+        return currentEngagedHuman ?: humans.firstOrNull()
+    }
+    
+    /**
+     * Update the engagement policy for the current engagement without stopping it
+     */
+    private fun updateEngagementPolicy(policy: EngagementPolicy) {
+        if (!isEngagementRunning || engageHumanAction == null) {
+            return
+        }
+        
+        try {
+            // Only update if policy is different from current
+            if (currentEngagementPolicy != policy) {
+                Log.i(TAG, "Updating engagement policy from $currentEngagementPolicy to $policy")
+                
+                // Set the new policy on the existing engagement action
+                engageHumanAction?.engagementPolicy = policy
+                
+                // Update current policy
+                currentEngagementPolicy = policy
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error updating engagement policy: ${e.message}", e)
+        }
+    }
+    
+    /**
+     * Engage with a human who is speaking with stronger engagement
+     */
+    private fun engageWithSpeakingHuman(human: Human) {
+        // Use STRONG engagement policy for speaking humans
+        currentEngagementPolicy = EngagementPolicy.STRICT
+        
+        // Send information about the speaker change to WebSocket server
+        sendSpeakerChangeEvent(human)
+    }
+    
+    /**
+     * Send speaker change event to WebSocket server
+     */
+    private fun sendSpeakerChangeEvent(human: Human) {
+        try {
+            val statusJson = JSONObject().apply {
+                put("type", "speaker_change")
+                put("gender", human.estimatedGender.toString())
+                put("age", human.estimatedAge.years)
+                put("emotion", human.emotion.pleasure.toString())
+                put("timestamp", System.currentTimeMillis())
+            }
+            
+            webSocketClient?.sendMessage(statusJson.toString())
+        } catch (e: Exception) {
+            Log.e(TAG, "Error sending speaker change event: ${e.message}", e)
+        }
+    }
+    
+    /**
+     * Clean up conversation tracking resources
+     */
+    private fun cleanupConversationTracking() {
+        // Cancel speech timeout timer
+        speechTimeoutTask?.cancel()
+        speechTimeoutTimer?.purge()
+        speechTimeoutTimer = null
+        speechTimeoutTask = null
+        
+        // Remove listeners
+        conversationStatus?.removeAllOnHeardListeners()
+        conversationStatus?.removeAllOnSayingChangedListeners()
+        conversationStatus = null
+        isSpeechDetectionActive = false
+        Log.i(TAG, "Conversation tracking cleaned up")
     }
     
     /**
@@ -389,14 +618,14 @@ class MainActivity : RobotActivity(), RobotLifecycleCallbacks,
             return
         } else {
             // Found at least one engaged human
-            engageWithHuman(humans.first())
+            engageWithHuman(humans.first(), EngagementPolicy.STRICT)
         }
     }
     
     /**
      * Engage with a specific human
      */
-    private fun engageWithHuman(human: Human) {
+    private fun engageWithHuman(human: Human, policy: EngagementPolicy = EngagementPolicy.STRICT) {
         val ctx = qiContext ?: return
         
         try {
@@ -409,13 +638,13 @@ class MainActivity : RobotActivity(), RobotLifecycleCallbacks,
             // Debug additional information about the human
             Log.d(TAG, "Engaging with human: attention=${human.attention}, excitement=${human.emotion?.excitement}")
             
-            // Build the engage human action
+            // Build the engage human action with specified policy
             engageHumanAction = EngageHumanBuilder.with(ctx)
                 .withHuman(human)
                 .build()
             
             // Run the engagement
-            Log.i(TAG, "Starting engagement with human")
+            Log.i(TAG, "Starting engagement with human using policy: $policy")
             isEngagementRunning = true
             
             // Run engagement asynchronously
@@ -576,6 +805,51 @@ class MainActivity : RobotActivity(), RobotLifecycleCallbacks,
             Log.e(TAG, "Error with animated speech: ${e.message}", e)
             isSpeaking.set(false)
             sendSpeakingStatus("error", text)
+        }
+    }
+
+    /**
+     * Set up the WebSocket toggle switch
+     */
+    private fun setupWebSocketToggle() {
+        val webSocketToggle = findViewById<Switch>(R.id.webSocketToggle)
+        
+        // Set initial state (disabled by default)
+        webSocketToggle.isChecked = isWebSocketEnabled
+        
+        // Add listener for toggle changes
+        webSocketToggle.setOnCheckedChangeListener { _, isChecked ->
+            isWebSocketEnabled = isChecked
+            
+            if (isChecked) {
+                // WebSocket enabled - connect if we have QiContext
+                Log.i(TAG, "WebSocket connection enabled")
+                updateStatus("WebSocket connection enabled")
+                
+                qiContext?.let {
+                    connectWebSocket()
+                }
+            } else {
+                // WebSocket disabled - disconnect if connected
+                Log.i(TAG, "WebSocket connection disabled")
+                updateStatus("WebSocket connection disabled")
+                
+                disconnectWebSocket()
+            }
+            
+            // Save the setting to preferences
+            getPreferences(Context.MODE_PRIVATE).edit()
+                .putBoolean("websocket_enabled", isChecked)
+                .apply()
+        }
+        
+        // Restore previous state if saved (but keep disabled by default)
+        val savedEnabled = getPreferences(Context.MODE_PRIVATE)
+            .getBoolean("websocket_enabled", false)
+        
+        if (savedEnabled) {
+            webSocketToggle.isChecked = true
+            // Toggle state will be handled by the listener
         }
     }
 }

@@ -4,4 +4,12 @@ websockets>=11.0.2
 opencv-python>=4.7.0
 numpy>=1.24.2
 python-dotenv>=1.0.0
-pillow>=9.0.0 
+pillow>=9.0.0
+# Speech processing dependencies
+flask>=2.3.3
+soundfile>=0.12.1
+requests>=2.31.0
+openai-whisper>=20231117
+pydub>=0.25.1
+torch>=2.0.0
+ffmpeg-python>=0.2.0 

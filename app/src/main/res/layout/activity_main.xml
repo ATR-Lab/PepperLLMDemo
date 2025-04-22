@@ -13,7 +13,7 @@
         android:layout_margin="16dp"
         android:text="Tap a button to play an animation"
         android:textSize="18sp"
-        app:layout_constraintBottom_toTopOf="@id/buttonsContainer"
+        app:layout_constraintBottom_toTopOf="@id/webSocketContainer"
         app:layout_constraintLeft_toLeftOf="parent"
         app:layout_constraintRight_toRightOf="parent"
         app:layout_constraintTop_toTopOf="parent" />
@@ -28,6 +28,33 @@
         app:layout_constraintRight_toRightOf="parent"
         app:layout_constraintTop_toTopOf="parent" />
 
+    <!-- WebSocket Toggle Container -->
+    <LinearLayout
+        android:id="@+id/webSocketContainer"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_margin="16dp"
+        android:orientation="horizontal"
+        app:layout_constraintBottom_toTopOf="@id/buttonsContainer"
+        app:layout_constraintLeft_toLeftOf="parent"
+        app:layout_constraintRight_toRightOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/responseTextView">
+
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="WebSocket Connection"
+            android:textSize="16sp" />
+
+        <Switch
+            android:id="@+id/webSocketToggle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:checked="false"
+            android:text="" />
+    </LinearLayout>
+    
     <LinearLayout
         android:id="@+id/buttonsContainer"
         android:layout_width="0dp"
@@ -37,7 +64,7 @@
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintLeft_toLeftOf="parent"
         app:layout_constraintRight_toRightOf="parent"
-        app:layout_constraintTop_toBottomOf="@id/responseTextView">
+        app:layout_constraintTop_toBottomOf="@id/webSocketContainer">
 
         <Button
             android:id="@+id/raiseHandsButton"

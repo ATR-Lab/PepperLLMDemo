@@ -178,6 +178,10 @@ class PepperWebSocketClient(
                                 Log.d(TAG, "Received command: ${json.getString("action")}")
                                 commandListener.onCommandReceived(json)
                             }
+                            "speech" -> {
+                                Log.d(TAG, "Received speech command: ${json.optString("action", "")}")
+                                commandListener.onCommandReceived(json)
+                            }
                             "face_detection" -> {
                                 Log.d(TAG, "Received face detection command: ${json.optString("action", "")}")
                                 commandListener.onCommandReceived(json)
@@ -189,6 +193,8 @@ class PepperWebSocketClient(
                             }
                             else -> {
                                 Log.d(TAG, "Received unknown message type: $type")
+                                // Forward to command listener anyway for future compatibility
+                                commandListener.onCommandReceived(json)
                             }
                         }
                     } else {
